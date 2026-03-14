@@ -1,13 +1,15 @@
 from transformers import pipeline
 import csv
-import importlib.util
+import json
 from pathlib import Path
 import logging
+import gc
 import re
 import unicodedata
 import pandas as pd
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from BLEnD import ANNOTATIONS_DIR, BLEnD_EVAL_DIR
+from BLEnD import ANNOTATIONS_DIR
 
 log = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -20,6 +22,7 @@ MODEL_LABEL = "gemma3_1b_it"
 PREDICTIONS_FILE = OUTPUT_DIR / f"{MODEL_LABEL}-{COUNTRY}_{LANGUAGE}_{PROMPT_ID}_result.csv"
 CLEANED_PREDICTIONS_FILE = OUTPUT_DIR / f"{MODEL_LABEL}-{COUNTRY}_{LANGUAGE}_{PROMPT_ID}_clean.csv"
 EVAL_RESULTS_FILE = OUTPUT_DIR / "evaluation_results.csv"
+QUESTION_RESULTS_FILE = OUTPUT_DIR / "evaluation_details.csv"
 
 
 QUESTIONS_DIR = Path("/Users/simon/PycharmProjects/LLM_assignement_1_simon_gobin/BLEnD/data/questions")
@@ -73,104 +76,155 @@ def normalize_answer(text: str) -> str:
     return normalized
 
 
-def clean_answer(text: str) -> str:
-    text = (text or "").replace("\r\n", "\n").strip()
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+def tokenize_for_match(text: str, language: str) -> list[str]:
+    normalized = normalize_answer(text)
+    if not normalized:
+        return []
 
-    cleaned_lines = []
-    stop_prefixes = (
-        "let me think",
-        "okay",
-        "explanation",
-        "step-by-step explanation",
-        "options:",
-        "question:",
-        "###",
-        "```",
-    )
-    skip_exact = {"answer:", "**final answer**", "final answer"}
+    if language == "Chinese":
+        try:
+            import jieba
+            return [token for token in jieba.cut(normalized) if token.strip()]
+        except Exception:
+            return normalized.split()
 
-    for line in lines:
-        lowered = line.casefold()
-        if lowered in skip_exact:
-            continue
-        if any(lowered.startswith(prefix) for prefix in stop_prefixes):
-            continue
-        if re.fullmatch(r"[-*]?\s*[a-d]\.?", lowered):
-            continue
-        if lowered.startswith("the answer is"):
-            continue
-        cleaned_lines.append(line)
+    if language == "Korean":
+        try:
+            from konlpy.tag import Okt
+            return [token for token in Okt().morphs(normalized) if token.strip()]
+        except Exception:
+            return normalized.split()
 
-    if not cleaned_lines:
-        cleaned_lines = lines
+    if language == "Arabic":
+        try:
+            from qalsadi.lemmatizer import Lemmatizer
+            lemmatizer = Lemmatizer()
+            lemmas = lemmatizer.lemmatize(normalized)
+            if isinstance(lemmas, list):
+                return [token for token in lemmas if str(token).strip()]
+        except Exception:
+            pass
+        return normalized.split()
 
-    candidate = cleaned_lines[0] if cleaned_lines else text
+    if language == "Persian":
+        try:
+            from hazm import Lemmatizer
+            lemmatizer = Lemmatizer()
+            return [lemmatizer.lemmatize(token) for token in normalized.split() if token.strip()]
+        except Exception:
+            return normalized.split()
 
-    candidate = re.split(r"\b(?:let me think|okay|explanation|options:|question:)\b", candidate, maxsplit=1, flags=re.IGNORECASE)[0]
-    candidate = re.sub(r"\*\*final answer\*\*", "", candidate, flags=re.IGNORECASE)
-    candidate = re.sub(r"^answer:\s*", "", candidate, flags=re.IGNORECASE)
-    candidate = candidate.strip("`#*- \n\t")
+    if language == "English":
+        try:
+            import spacy
+            nlp = spacy.load("en_core_web_sm")
+            return [token.lemma_ for token in nlp(normalized) if token.lemma_.strip()]
+        except Exception:
+            return normalized.split()
 
-    return normalize_answer(candidate)
-
-
-def clean_predictions_csv() -> None:
-    if not PREDICTIONS_FILE.exists():
-        raise FileNotFoundError(f"Missing raw predictions file: {PREDICTIONS_FILE}")
-
-    with PREDICTIONS_FILE.open("r", encoding="utf-8", newline="") as src:
-        reader = csv.DictReader(src)
-        rows = list(reader)
-
-    cleaned_rows = []
-    for row in rows:
-        cleaned_row = dict(row)
-        cleaned_row["raw_response"] = row["response"]
-        cleaned_row["response"] = clean_answer(row["response"])
-        cleaned_rows.append(cleaned_row)
-
-    with CLEANED_PREDICTIONS_FILE.open("w", encoding="utf-8", newline="") as dst:
-        writer = csv.DictWriter(
-            dst,
-            fieldnames=["ID", "country", "prompt_id", "question", "prompt", "response", "raw_response"],
-        )
-        writer.writeheader()
-        writer.writerows(cleaned_rows)
-
-    log.info("Saved cleaned predictions to %s", CLEANED_PREDICTIONS_FILE)
+    return normalized.split()
 
 
-def load_blend_evaluator():
-    evaluate_path = BLEnD_EVAL_DIR / "evaluate.py"
-    import sys
-    sys.path.insert(0, str(BLEnD_EVAL_DIR))
-    spec = importlib.util.spec_from_file_location("blend_evaluate", evaluate_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load BLEnD evaluator from {evaluate_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def is_reference_match(prediction: str, references: list[str], language: str) -> tuple[bool, str]:
+    pred_norm = normalize_answer(prediction)
+    pred_tokens = tokenize_for_match(prediction, language)
+
+    for ref in references:
+        ref_norm = normalize_answer(ref)
+        ref_tokens = tokenize_for_match(ref, language)
+
+        if pred_norm == ref_norm:
+            return True, ref
+        if pred_norm and (pred_norm in ref_norm or ref_norm in pred_norm):
+            return True, ref
+        if pred_tokens and ref_tokens:
+            pred_set = set(pred_tokens)
+            ref_set = set(ref_tokens)
+            if pred_set == ref_set or pred_set.issubset(ref_set) or ref_set.issubset(pred_set):
+                return True, ref
+
+    return False, ""
 
 
 def run_blend_evaluation() -> None:
-    evaluator = load_blend_evaluator()
-    evaluator.evaluate_all_metrics(
-        model=MODEL_LABEL,
-        country=COUNTRY,
-        language=LANGUAGE,
-        prompt_no=PROMPT_ID,
-        response_dir=str(OUTPUT_DIR),
-        annotation_dir=str(ANNOTATIONS_DIR),
-        mc_dir=str(BLEnD_EVAL_DIR / "mc_data"),
-        id_col="ID",
-        q_col="question",
-        r_col="response",
-        annotations_key="annotations",
-        eval_res_filename=str(EVAL_RESULTS_FILE),
-        annotation_template="{country}_data.json",
+    annotations_file = ANNOTATIONS_DIR / f"{COUNTRY}_data.json"
+    with annotations_file.open("r", encoding="utf-8") as handle:
+        annotations = json.load(handle)
+
+    predictions_df = pd.read_csv(PREDICTIONS_FILE)
+
+    detail_rows = []
+    correct = 0
+
+    for _, row in predictions_df.iterrows():
+        qid = row["ID"]
+        data = annotations.get(qid)
+        if not data:
+            continue
+
+        references = []
+        weighted_match = 0.0
+        max_count = 1
+        for annotation in data.get("annotations", []):
+            max_count = max(max_count, annotation.get("count", 1))
+            references.extend(annotation.get("answers", []))
+            references.extend(annotation.get("en_answers", []))
+
+        matched, matched_ref = is_reference_match(str(row["response"]), references, LANGUAGE)
+        if matched:
+            correct += 1
+            for annotation in data.get("annotations", []):
+                candidate_refs = annotation.get("answers", []) + annotation.get("en_answers", [])
+                if matched_ref in candidate_refs:
+                    weighted_match = annotation.get("count", 1) / max_count
+                    break
+
+        detail_rows.append(
+            {
+                "ID": qid,
+                "country": COUNTRY,
+                "language": LANGUAGE,
+                "prompt_id": PROMPT_ID,
+                "prediction": row["response"],
+                "matched": int(matched),
+                "weight_score": weighted_match,
+                "matched_reference": matched_ref,
+            }
+        )
+
+    total = len(detail_rows)
+    accuracy = correct / total if total else 0.0
+    weighted_accuracy = (
+        sum(row["weight_score"] for row in detail_rows) / total if total else 0.0
     )
-    log.info("Saved BLEnD evaluation to %s", EVAL_RESULTS_FILE)
+
+    detail_df = pd.DataFrame(detail_rows)
+    detail_df.to_csv(QUESTION_RESULTS_FILE, index=False, encoding="utf-8")
+
+    summary_df = pd.DataFrame(
+        [
+            {
+                "model": MODEL_LABEL,
+                "country": COUNTRY,
+                "language": LANGUAGE,
+                "prompt_no": PROMPT_ID,
+                "eval_method": "simple_exact",
+                "score": accuracy,
+            },
+            {
+                "model": MODEL_LABEL,
+                "country": COUNTRY,
+                "language": LANGUAGE,
+                "prompt_no": PROMPT_ID,
+                "eval_method": "simple_weighted",
+                "score": weighted_accuracy,
+            },
+        ]
+    )
+    summary_df.to_csv(EVAL_RESULTS_FILE, index=False, encoding="utf-8")
+
+    log.info("Saved simple evaluation details to %s", QUESTION_RESULTS_FILE)
+    log.info("Saved simple evaluation summary to %s", EVAL_RESULTS_FILE)
 
 
 def setup_logging() -> None:
@@ -252,7 +306,8 @@ def generate_gemma3_response(pipe, system_prompt: str, user_prompt: str) -> str:
 
 
 
-def test():
+def run():
+    batch_size = 50
     #model_list = ["google/gemma-2b", "Qwen/Qwen3-0.6B"]
     #model_name = model_list[0]
     #tokenizer, model = load_model(model_name)
@@ -275,36 +330,40 @@ def test():
         )
         writer.writeheader()
 
-        for _, row in df.iterrows():
-            question = row["Translation"]
+        for start in range(0, 55, batch_size):
+            batch = df.iloc[start:start + batch_size]
+            log.info("Processing batch %s-%s", start, min(start + batch_size, len(df)))
 
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
-            ]
+            for _, row in batch.iterrows():
+                question = row["Translation"]
 
-            #response = output_message_tok(model, tokenizer, messages)
-            response = generate_gemma3_response(pipe, system_prompt, question)
+                #response = output_message_tok(model, tokenizer, messages)
+                response = generate_gemma3_response(pipe, system_prompt, question)
 
-            writer.writerow(
-                {
-                    "ID": row["ID"],
-                    "country": COUNTRY,
-                    "prompt_id": PROMPT_ID,
-                    "question": question,
-                    "prompt": system_prompt,
-                    "response": response,
-                }
-            )
+                writer.writerow(
+                    {
+                        "ID": row["ID"],
+                        "country": COUNTRY,
+                        "prompt_id": PROMPT_ID,
+                        "question": question,
+                        "prompt": system_prompt,
+                        "response": response,
+                    }
+                )
 
-            log.info("ID: %s", row["ID"])
-            log.info("Response: %s", response)
+                log.info("ID: %s", row["ID"])
+                log.info("Response: %s", response)
+
+            handle.flush()
+            del batch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 def main():
     setup_logging()
     try:
-        test()
-        clean_predictions_csv()
+        run()
         run_blend_evaluation()
     except Exception:
         log.exception("Benchmark failed")
