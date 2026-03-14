@@ -9,23 +9,28 @@ import unicodedata
 import pandas as pd
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from BLEnD import ANNOTATIONS_DIR
+from BLEnD import ANNOTATIONS_DIR, COUNTRY_LANG
 
 log = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 LOG_FILE = OUTPUT_DIR / "benchmarck_3.log"
-COUNTRY = "Algeria"
+COUNTRY_LIST = ["UK", "US", "West_Java", "Algeria"]
 LANGUAGE = "English"
 PROMPT_ID = "debug-system"
 MODEL_LABEL = "gemma3_1b_it"
-PREDICTIONS_FILE = OUTPUT_DIR / f"{MODEL_LABEL}-{COUNTRY}_{LANGUAGE}_{PROMPT_ID}_result.csv"
-CLEANED_PREDICTIONS_FILE = OUTPUT_DIR / f"{MODEL_LABEL}-{COUNTRY}_{LANGUAGE}_{PROMPT_ID}_clean.csv"
 EVAL_RESULTS_FILE = OUTPUT_DIR / "evaluation_results.csv"
-QUESTION_RESULTS_FILE = OUTPUT_DIR / "evaluation_details.csv"
 
 
 QUESTIONS_DIR = Path("/Users/simon/PycharmProjects/LLM_assignement_1_simon_gobin/BLEnD/data/questions")
+
+
+def get_predictions_file(country: str, language: str) -> Path:
+    return OUTPUT_DIR / f"{MODEL_LABEL}-{country}_{language}_{PROMPT_ID}_result.csv"
+
+
+def get_question_results_file(country: str, language: str) -> Path:
+    return OUTPUT_DIR / f"evaluation_details_{country}_{language}.csv"
 
 
 def load_questions(country: str) -> list[dict]:
@@ -146,12 +151,12 @@ def is_reference_match(prediction: str, references: list[str], language: str) ->
     return False, ""
 
 
-def run_blend_evaluation() -> None:
-    annotations_file = ANNOTATIONS_DIR / f"{COUNTRY}_data.json"
+def run_blend_evaluation(country: str, language: str) -> None:
+    annotations_file = ANNOTATIONS_DIR / f"{country}_data.json"
     with annotations_file.open("r", encoding="utf-8") as handle:
         annotations = json.load(handle)
 
-    predictions_df = pd.read_csv(PREDICTIONS_FILE)
+    predictions_df = pd.read_csv(get_predictions_file(country, language))
 
     detail_rows = []
     correct = 0
@@ -170,7 +175,7 @@ def run_blend_evaluation() -> None:
             references.extend(annotation.get("answers", []))
             references.extend(annotation.get("en_answers", []))
 
-        matched, matched_ref = is_reference_match(str(row["response"]), references, LANGUAGE)
+        matched, matched_ref = is_reference_match(str(row["response"]), references, language)
         if matched:
             correct += 1
             for annotation in data.get("annotations", []):
@@ -182,8 +187,8 @@ def run_blend_evaluation() -> None:
         detail_rows.append(
             {
                 "ID": qid,
-                "country": COUNTRY,
-                "language": LANGUAGE,
+                "country": country,
+                "language": language,
                 "prompt_id": PROMPT_ID,
                 "prediction": row["response"],
                 "matched": int(matched),
@@ -199,31 +204,39 @@ def run_blend_evaluation() -> None:
     )
 
     detail_df = pd.DataFrame(detail_rows)
-    detail_df.to_csv(QUESTION_RESULTS_FILE, index=False, encoding="utf-8")
+    detail_file = get_question_results_file(country, language)
+    detail_df.to_csv(detail_file, index=False, encoding="utf-8")
 
     summary_df = pd.DataFrame(
         [
             {
                 "model": MODEL_LABEL,
-                "country": COUNTRY,
-                "language": LANGUAGE,
+                "country": country,
+                "language": language,
                 "prompt_no": PROMPT_ID,
                 "eval_method": "simple_exact",
                 "score": accuracy,
             },
             {
                 "model": MODEL_LABEL,
-                "country": COUNTRY,
-                "language": LANGUAGE,
+                "country": country,
+                "language": language,
                 "prompt_no": PROMPT_ID,
                 "eval_method": "simple_weighted",
                 "score": weighted_accuracy,
             },
         ]
     )
+    if EVAL_RESULTS_FILE.exists():
+        previous_df = pd.read_csv(EVAL_RESULTS_FILE)
+        summary_df = pd.concat([previous_df, summary_df], ignore_index=True)
+        summary_df = summary_df.drop_duplicates(
+            subset=["model", "country", "language", "prompt_no", "eval_method"],
+            keep="last",
+        )
     summary_df.to_csv(EVAL_RESULTS_FILE, index=False, encoding="utf-8")
 
-    log.info("Saved simple evaluation details to %s", QUESTION_RESULTS_FILE)
+    log.info("Saved simple evaluation details to %s", detail_file)
     log.info("Saved simple evaluation summary to %s", EVAL_RESULTS_FILE)
 
 
@@ -241,7 +254,7 @@ def setup_logging() -> None:
 
 def save_predictions(rows: list[dict]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    with PREDICTIONS_FILE.open("w", encoding="utf-8", newline="") as handle:
+    with get_predictions_file("TMP", LANGUAGE).open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=["ID", "country", "prompt_id", "question", "prompt", "response"],
@@ -306,22 +319,30 @@ def generate_gemma3_response(pipe, system_prompt: str, user_prompt: str) -> str:
 
 
 
-def run():
+def get_question_text(row: pd.Series, language: str) -> str:
+    if language == "English":
+        translated = row.get("Translation")
+        if isinstance(translated, str) and translated.strip():
+            return translated
+    return row["Question"]
+
+
+def run(country: str, language: str):
     batch_size = 50
     #model_list = ["google/gemma-2b", "Qwen/Qwen3-0.6B"]
     #model_name = model_list[0]
     #tokenizer, model = load_model(model_name)
     pipe = load_gemma3()
 
-    df = pd.read_csv(str(QUESTIONS_DIR / f"{COUNTRY}_questions.csv"))
+    df = pd.read_csv(str(QUESTIONS_DIR / f"{country}_questions.csv"))
 
     system_prompt = (
-        "Requirements: consider you are from Algeria and answer the given question. "
+        f"Requirements: consider you are from {country} and answer the given question. "
         "Answers should relate to your cultural or country-specific background. "
-        "The answer should be short/concrete. In general, each question will have one answer only."
+        "The answer should be short/concrete."
     )
 
-    output_file = PREDICTIONS_FILE
+    output_file = get_predictions_file(country, language)
 
     with output_file.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
@@ -330,12 +351,12 @@ def run():
         )
         writer.writeheader()
 
-        for start in range(0, 55, batch_size):
+        for start in range(0, len(df), batch_size):
             batch = df.iloc[start:start + batch_size]
             log.info("Processing batch %s-%s", start, min(start + batch_size, len(df)))
 
             for _, row in batch.iterrows():
-                question = row["Translation"]
+                question = get_question_text(row, language)
 
                 #response = output_message_tok(model, tokenizer, messages)
                 response = generate_gemma3_response(pipe, system_prompt, question)
@@ -343,7 +364,7 @@ def run():
                 writer.writerow(
                     {
                         "ID": row["ID"],
-                        "country": COUNTRY,
+                        "country": country,
                         "prompt_id": PROMPT_ID,
                         "question": question,
                         "prompt": system_prompt,
@@ -360,11 +381,18 @@ def run():
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+    log.info("Saved predictions to %s", output_file)
+
 def main():
     setup_logging()
     try:
-        run()
-        run_blend_evaluation()
+        if EVAL_RESULTS_FILE.exists():
+            EVAL_RESULTS_FILE.unlink()
+        for country in COUNTRY_LIST:
+            language = LANGUAGE if LANGUAGE else COUNTRY_LANG[country]
+            log.info("Running benchmark for %s", country)
+            run(country, language)
+            run_blend_evaluation(country, language)
     except Exception:
         log.exception("Benchmark failed")
         raise
