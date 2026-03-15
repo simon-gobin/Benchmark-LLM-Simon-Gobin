@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 LOG_FILE = OUTPUT_DIR / "benchmarck_3.log"
-COUNTRY_LIST = ["UK", "US", "West_Java", "Algeria"]
+COUNTRY_LIST = ["UK", "China", "Iran", "Algeria"]
 LANGUAGE = "English"
 PROMPT_ID = "debug-system"
 MODEL_LABEL = "gemma3_1b_it"
@@ -151,7 +151,7 @@ def is_reference_match(prediction: str, references: list[str], language: str) ->
     return False, ""
 
 
-def run_blend_evaluation(country: str, language: str) -> None:
+def Track_A_run_blend_evaluation(country: str, language: str) -> None:
     annotations_file = ANNOTATIONS_DIR / f"{country}_data.json"
     with annotations_file.open("r", encoding="utf-8") as handle:
         annotations = json.load(handle)
@@ -327,7 +327,7 @@ def get_question_text(row: pd.Series, language: str) -> str:
     return row["Question"]
 
 
-def run(country: str, language: str):
+def Track_A_run(country: str, language: str):
     batch_size = 50
     #model_list = ["google/gemma-2b", "Qwen/Qwen3-0.6B"]
     #model_name = model_list[0]
@@ -391,8 +391,8 @@ def main():
         for country in COUNTRY_LIST:
             language = LANGUAGE if LANGUAGE else COUNTRY_LANG[country]
             log.info("Running benchmark for %s", country)
-            run(country, language)
-            run_blend_evaluation(country, language)
+            Track_A_run(country, language)
+            Track_A_run_blend_evaluation(country, language)
     except Exception:
         log.exception("Benchmark failed")
         raise
