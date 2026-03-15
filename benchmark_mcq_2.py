@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 LOG_FILE = OUTPUT_DIR / "benchmarck_3.log"
 country_list = ["UK", "Iran", "China", "Azerbaijan"]
+MCQ_FILE = PROJECT_ROOT / "BLEnD" / "evaluation" / "mc_data" / "v1.1" / "mc_questions_file-1.csv"
 
 def setup_logging() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -64,10 +65,9 @@ def generate_gemma3_response(pipe, system_prompt: str, question: str) -> str:
     return outputs[0][0]["generated_text"][-1]["content"].strip()
 
 
-def run_benchmark(country_list):
+def run_benchmark(country_list, MCQ_FILE):
     pipe = load_gemma3()
-    df_questions = pd.read_csv("BLEnD/evaluation/mc_data/v1.1/mc_questions_file-1.csv")
-    df_questions = df_questions.reset_index(drop=True)
+    df_questions = pd.read_csv(MCQ_FILE)
 
     system_prompt = (
         "You need to answer multiple-choice questions. "
@@ -199,7 +199,7 @@ def main():
     setup_logging()
     try:
         log.info("Running benchmark for MCQ")
-        run_benchmark(country_list)
+        run_benchmark(country_list, MCQ_FILE)
         run_evaluation()
         log.info("Finished benchmark for MCQ")
     except Exception:
