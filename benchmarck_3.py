@@ -22,7 +22,7 @@ MODEL_LABEL = "gemma3_1b_it"
 EVAL_RESULTS_FILE = OUTPUT_DIR / "evaluation_results.csv"
 
 
-QUESTIONS_DIR = Path("/Users/simon/PycharmProjects/LLM_assignement_1_simon_gobin/BLEnD/data/questions")
+QUESTIONS_DIR = Path("/data/questions")
 
 
 def get_predictions_file(country: str, language: str) -> Path:
