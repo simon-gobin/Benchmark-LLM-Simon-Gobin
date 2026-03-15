@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 LOG_FILE = OUTPUT_DIR / "benchmarck_3.log"
 country_list = ["UK", "Iran", "China", "Azerbaijan"]
-MCQ_FILE = PROJECT_ROOT / "data" / "mc_questions_file-1.csv"
+MCQ_FILE = PROJECT_ROOT / "data" / "mc_data" / "v1.1" / "mc_questions_file-1.csv"
 
 def setup_logging() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
