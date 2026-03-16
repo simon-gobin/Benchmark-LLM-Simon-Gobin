@@ -7,7 +7,6 @@ import torch
 import time
 import json
 import re
-import warnings
 
 
 
@@ -17,11 +16,14 @@ OUTPUT_DIR = PROJECT_ROOT / "outputs"
 LOG_FILE = OUTPUT_DIR / "benchmarck_3.log"
 country_list = ["UK", "Iran", "China", "Azerbaijan"]
 MCQ_FILE = PROJECT_ROOT / "data" / "mc_data" / "v1.1" / "mc_questions_file-1.csv"
+BATCH_SIZE = 500
+INFER_BATCH_SIZE = 16
+logging_level = logging.INFO
 
 def setup_logging() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging_level,
         format="%(asctime)s | %(levelname)s | %(filename)s:%(lineno)d | %(message)s",
         handlers=[
             logging.FileHandler(LOG_FILE, encoding="utf-8"),
@@ -32,40 +34,60 @@ def setup_logging() -> None:
 
 
 def load_gemma3():
-    device = 0 if torch.cuda.is_available() else -1
+    if torch.cuda.is_available():
+        device = 0
+        device_label = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        device_label = "mps"
+    else:
+        device = -1
+        device_label = "cpu"
+
     pipe = pipeline(
         "text-generation",
         model="google/gemma-3-1b-it",
         device=device,
     )
-    log.info("Loading gemma model on %s", "cuda" if device == 0 else "cpu")
+    log.info("Loading gemma model on %s", device_label)
     return pipe
 
-def generate_gemma3_response(pipe, system_prompt: str, question: str) -> str:
-    messages = [[
-        {
-            "role": "system",
-            "content": [{"type": "text", "text": system_prompt}],
-        },
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": question}],
-        },
-    ]]
+def generate_gemma3_responses_batch(pipe, system_prompt: str, questions: list[str]) -> list[str]:
+    messages_batch = [
+        [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": system_prompt}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": question}],
+            },
+        ]
+        for question in questions
+    ]
 
     gen_config = GenerationConfig(
         max_new_tokens=32,
         do_sample=False,
-        max_length=None # Also helps with the previous length warning
+        max_length=None,
     )
 
-    # Pass the config object instead of individual arguments
-    outputs = pipe(messages, generation_config=gen_config)
-    log.debug("Generating response %s", outputs)
-    return outputs[0][0]["generated_text"][-1]["content"].strip()
+    outputs = pipe(
+        messages_batch,
+        generation_config=gen_config,
+        batch_size=len(questions),
+    )
+
+    responses = []
+    for output in outputs:
+        log.debug(output)
+        responses.append(output[0]["generated_text"][-1]["content"].strip())
+
+    return responses
 
 
-def run_benchmark(country_list, MCQ_FILE):
+def run_benchmark(country_list, MCQ_FILE, BATCH_SIZE, INFER_BATCH_SIZE):
     pipe = load_gemma3()
     df_questions = pd.read_csv(MCQ_FILE)
 
@@ -75,7 +97,8 @@ def run_benchmark(country_list, MCQ_FILE):
         "Do not provide any explanation."
     )
 
-    BATCH_SIZE = 500
+    BATCH_SIZE = BATCH_SIZE
+    INFER_BATCH_SIZE = INFER_BATCH_SIZE
     BATCH_DIR = OUTPUT_DIR / "batches"
     BATCH_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -92,20 +115,36 @@ def run_benchmark(country_list, MCQ_FILE):
             batch = df_country.iloc[start:end].copy()
             log.info("Batch %s started for %s rows %s-%s", batch_id + 1, country, start + 1, end)
 
-            for index, row in batch.iterrows():
-                log.debug("Question %s", row["MCQID"])
-                start_time = time.perf_counter()
+            responses = []
+            latencies = []
+            mini_batch_total = (len(batch) + INFER_BATCH_SIZE - 1) // INFER_BATCH_SIZE
 
-                response = generate_gemma3_response(
+            for mini_batch_id, mini_start in enumerate(range(0, len(batch), INFER_BATCH_SIZE)):
+                mini_end = min(mini_start + INFER_BATCH_SIZE, len(batch))
+                mini_batch = batch.iloc[mini_start:mini_end]
+                log.info(
+                    "Mini-batch %s/%s for %s rows %s-%s",
+                    mini_batch_id + 1,
+                    mini_batch_total,
+                    country,
+                    start + mini_start + 1,
+                    start + mini_end,
+                )
+
+                start_time = time.perf_counter()
+                mini_responses = generate_gemma3_responses_batch(
                     pipe,
                     system_prompt=system_prompt,
-                    question=row["prompt"],
+                    questions=mini_batch["prompt"].tolist(),
                 )
                 elapsed = time.perf_counter() - start_time
+                avg_latency = elapsed / len(mini_batch)
 
-                batch.at[index, "response"] = response
-                batch.at[index, "latency_sec"] = elapsed
-                log.debug("Generated response %s", response)
+                responses.extend(mini_responses)
+                latencies.extend([avg_latency] * len(mini_batch))
+
+            batch["response"] = responses
+            batch["latency_sec"] = latencies
 
             batch_file = BATCH_DIR / f"{country}_batch_{batch_id:04d}.csv"
             batch.to_csv(batch_file, index=False)
@@ -199,7 +238,7 @@ def main():
     setup_logging()
     try:
         log.info("Running benchmark for MCQ")
-        run_benchmark(country_list, MCQ_FILE)
+        run_benchmark(country_list, MCQ_FILE, BATCH_SIZE, INFER_BATCH_SIZE)
         run_evaluation()
         log.info("Finished benchmark for MCQ")
     except Exception:
