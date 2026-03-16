@@ -9,17 +9,17 @@ import json
 import re
 
 EXPERIMENTS = {
-    "qwen_locale": {
-        "model_name": "Qwen/Qwen3-8B",
-        "model_label": "qwen3_8b",
-        "backend": "qwen",
-        "prompt_id": "locale_aware_confidence",
-    },
     "gemma_baseline": {
         "model_name": "google/gemma-3-12b-it",
         "model_label": "gemma3_12b_it",
         "backend": "gemma",
         "prompt_id": "baseline",
+    },
+    "qwen_locale": {
+        "model_name": "Qwen/Qwen3-8B",
+        "model_label": "qwen3_8b",
+        "backend": "qwen",
+        "prompt_id": "locale_aware_confidence",
     },
     "gemma_locale": {
         "model_name": "google/gemma-3-12b-it",
