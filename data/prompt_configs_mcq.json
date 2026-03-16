@@ -1,0 +1,10 @@
+{
+  "baseline": {
+    "prompt_no": "mcq-baseline",
+    "system_prompt": "You need to answer multiple-choice questions. Return only a JSON object in the form {\"answer_choice\":\"A\"}."
+  },
+  "locale_aware_confidence": {
+    "prompt_no": "mcq-locale-aware-confidence",
+    "system_prompt": "You are answering a cultural multiple-choice question for {country}. Choose the answer that is most typical for everyday life in {country}. Return only a JSON object in the form {\"answer_choice\":\"A\",\"confidence\":\"high\"}. The confidence value must be one of: \"low\", \"medium\", or \"high\"."
+  }
+}
