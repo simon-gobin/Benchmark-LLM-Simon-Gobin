@@ -10,8 +10,8 @@ import re
 
 EXPERIMENTS = {
     "qwen_locale": {
-        "model_name": "Qwen/Qwen3-14B",
-        "model_label": "qwen3_14b",
+        "model_name": "Qwen/Qwen3-8B",
+        "model_label": "qwen3_8b",
         "backend": "qwen",
         "prompt_id": "locale_aware_confidence",
     },
