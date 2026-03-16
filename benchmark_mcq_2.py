@@ -21,6 +21,12 @@ EXPERIMENTS = {
         "backend": "gemma",
         "prompt_id": "baseline",
     },
+    "gemma_locale": {
+        "model_name": "google/gemma-3-12b-it",
+        "model_label": "gemma3_12b_it",
+        "backend": "gemma",
+        "prompt_id": "locale_aware_confidence",
+    },
 }
 
 log = logging.getLogger(__name__)
@@ -110,6 +116,7 @@ def generate_gemma3_responses_batch(pipe, system_prompt: str, questions: list[st
 
 def load_qwen3(model_name="Qwen/Qwen3-14B"):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.padding_side = "left"
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype="auto",
