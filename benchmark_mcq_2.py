@@ -38,6 +38,7 @@ MCQ_FILE = PROJECT_ROOT / "data" / "mc_data" / "v1.1" / "mc_questions_file-1.csv
 PROMPT_CONFIG_FILE = PROJECT_ROOT / "data" / "prompt_configs_mcq.json"
 BATCH_SIZE = 500
 INFER_BATCH_SIZE = 64
+POST_EVAL_INFER_BATCH_SIZE = 4
 logging_level = logging.INFO
 
 def setup_logging() -> None:
@@ -416,12 +417,25 @@ def run_post_evaluation(model_label: str, prompt_no: str, backend: str, model_na
     model_bundle = load_model(backend, model_name)
 
     prompts = [build_post_eval_prompt(row) for _, row in df_sample.iterrows()]
-    responses = generate_responses_batch(
-        model_bundle,
-        system_prompt="Return only valid JSON.",
-        questions=prompts,
-        max_new_tokens=160,
-    )
+    responses = []
+
+    for start in range(0, len(prompts), POST_EVAL_INFER_BATCH_SIZE):
+        end = min(start + POST_EVAL_INFER_BATCH_SIZE, len(prompts))
+        mini_prompts = prompts[start:end]
+
+        log.info("Post-eval mini-batch rows %s-%s", start + 1, end)
+
+        mini_responses = generate_responses_batch(
+            model_bundle,
+            system_prompt="Return only valid JSON.",
+            questions=mini_prompts,
+            max_new_tokens=160,
+        )
+        responses.extend(mini_responses)
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     df_sample["post_eval_response"] = responses
     parsed = df_sample["post_eval_response"].apply(parse_post_eval_response)
