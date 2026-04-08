@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 LOG_FILE = OUTPUT_DIR / "benchmarck_3.log"
-country_list = ["UK", "Iran", "China", "Azerbaijan"]
+country_list = ["US","UK", "Iran", "China", "Azerbaijan"]
 MCQ_FILE = PROJECT_ROOT / "data" / "mc_data" / "v1.1" / "mc_questions_file-1.csv"
 PROMPT_CONFIG_FILE = PROJECT_ROOT / "data" / "prompt_configs_mcq.json"
 BATCH_SIZE = 500
@@ -78,7 +78,7 @@ def load_gemma3(model_name: str):
     log.info("Loading gemma model on %s", device_label)
     return pipe
 
-def generate_gemma3_responses_batch(pipe, system_prompt: str, questions: list[str]) -> list[str]:
+def generate_gemma3_responses_batch(pipe, system_prompt: str, questions: list[str], max_new_tokens: int = 32) -> list[str]:
     messages_batch = [
         [
             {
@@ -94,7 +94,7 @@ def generate_gemma3_responses_batch(pipe, system_prompt: str, questions: list[st
     ]
 
     gen_config = GenerationConfig(
-        max_new_tokens=32,
+        max_new_tokens=max_new_tokens,
         do_sample=False,
         max_length=None,
     )
@@ -125,7 +125,7 @@ def load_qwen3(model_name="Qwen/Qwen3-14B"):
     return tokenizer, model
 
 
-def generate_qwen3_responses_batch(model, tokenizer, system_prompt: str, questions: list[str]) -> list[str]:
+def generate_qwen3_responses_batch(model, tokenizer, system_prompt: str, questions: list[str], max_new_tokens: int = 32) -> list[str]:
     texts = []
 
     for question in questions:
@@ -150,7 +150,7 @@ def generate_qwen3_responses_batch(model, tokenizer, system_prompt: str, questio
 
     generated_ids = model.generate(
         **model_inputs,
-        max_new_tokens=32,
+        max_new_tokens=max_new_tokens,
         do_sample=False,
     )
 
@@ -173,12 +173,13 @@ def load_model(backend: str, model_name: str):
 
     raise ValueError(f"Unsupported backend: {backend}")
 
-def generate_responses_batch(model_bundle, system_prompt: str, questions: list[str]) -> list[str]:
+def generate_responses_batch(model_bundle, system_prompt: str, questions: list[str], max_new_tokens: int = 32) -> list[str]:
     if model_bundle["backend"] == "gemma":
         return generate_gemma3_responses_batch(
             model_bundle["pipe"],
             system_prompt=system_prompt,
             questions=questions,
+            max_new_tokens=max_new_tokens,
         )
 
     if model_bundle["backend"] == "qwen":
@@ -187,6 +188,7 @@ def generate_responses_batch(model_bundle, system_prompt: str, questions: list[s
             model_bundle["tokenizer"],
             system_prompt=system_prompt,
             questions=questions,
+            max_new_tokens=max_new_tokens,
         )
 
     raise ValueError(f"Unsupported backend: {model_bundle['backend']}")
@@ -351,6 +353,100 @@ def release_model(model_bundle) -> None:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+#========================Post eval=================
+
+def sample_post_eval_rows(df: pd.DataFrame, frac: float = 0.10) -> pd.DataFrame:
+    df_true = df[df["is_correct"] == True].copy()
+    df_false = df[df["is_correct"] == False].copy()
+
+    n_true = max(1, int(len(df_true) * frac)) if len(df_true) else 0
+    n_false = max(1, int(len(df_false) * frac)) if len(df_false) else 0
+
+    sampled_true = df_true.sample(n=min(n_true, len(df_true)), random_state=42) if n_true else df_true.head(0)
+    sampled_false = df_false.sample(n=min(n_false, len(df_false)), random_state=42) if n_false else df_false.head(0)
+
+    return pd.concat([sampled_true, sampled_false], ignore_index=True)
+
+def build_post_eval_prompt(row) -> str:
+    return f"""You are analyzing a cultural multiple-choice question.
+
+Question:
+{row['prompt']}
+
+Answer the question again and explain briefly what cultural clue is most important.
+Return only JSON with this schema:
+{{
+  "predicted_answer": "A",
+  "confidence": "low",
+  "reasoning_summary": "short explanation",
+  "error_type": "cultural_overgeneralization",
+  "likely_failure_source": "knowledge",
+  "mentions_country_specific_cue": false
+}}"""
+
+def parse_post_eval_response(text: str) -> dict:
+    raw = (text or "").strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            pass
+
+    return {}
+
+
+
+def run_post_evaluation(model_label: str, prompt_no: str, backend: str, model_name: str):
+    input_file = OUTPUT_DIR / f"questions_answer_evaluated_{model_label}_{prompt_no}.csv"
+    output_file = OUTPUT_DIR / f"questions_answer_post_eval_{model_label}_{prompt_no}.csv"
+
+    df = pd.read_csv(input_file)
+    df_sample = sample_post_eval_rows(df, frac=0.10)
+
+    if df_sample.empty:
+        log.warning("No rows available for post evaluation")
+        return
+
+    model_bundle = load_model(backend, model_name)
+
+    prompts = [build_post_eval_prompt(row) for _, row in df_sample.iterrows()]
+    responses = generate_responses_batch(
+        model_bundle,
+        system_prompt="Return only valid JSON.",
+        questions=prompts,
+        max_new_tokens=160,
+    )
+
+    df_sample["post_eval_response"] = responses
+    parsed = df_sample["post_eval_response"].apply(parse_post_eval_response)
+
+    df_sample["post_eval_predicted_answer"] = parsed.apply(lambda x: x.get("predicted_answer", ""))
+    df_sample["post_eval_confidence"] = parsed.apply(lambda x: x.get("confidence", ""))
+    df_sample["post_eval_reasoning_summary"] = parsed.apply(lambda x: x.get("reasoning_summary", ""))
+    df_sample["post_eval_error_type"] = parsed.apply(lambda x: x.get("error_type", ""))
+    df_sample["post_eval_likely_failure_source"] = parsed.apply(lambda x: x.get("likely_failure_source", ""))
+    df_sample["post_eval_mentions_country_specific_cue"] = parsed.apply(
+        lambda x: x.get("mentions_country_specific_cue", "")
+    )
+
+    df_sample["post_eval_is_correct"] = (
+            df_sample["post_eval_predicted_answer"].str.upper() == df_sample["answer_idx"].str.upper()
+    )
+    df_sample["post_eval_is_correct_int"] = df_sample["post_eval_is_correct"].astype(int)
+
+    df_sample.to_csv(output_file, index=False)
+
+    release_model(model_bundle)
+    log.info("Saved post evaluation to %s", output_file)
+
+
+
 
 def main():
     setup_logging()
@@ -374,6 +470,13 @@ def main():
             )
             run_evaluation(experiment["model_label"], prompt_config["prompt_no"])
             release_model(model_bundle)
+
+            run_post_evaluation(
+                model_label=experiment["model_label"],
+                prompt_no=prompt_config["prompt_no"],
+                backend=experiment["backend"],
+                model_name=experiment["model_name"],
+            )
 
         log.info("Finished benchmark for MCQ")
     except Exception:
