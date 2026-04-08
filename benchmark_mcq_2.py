@@ -38,7 +38,7 @@ MCQ_FILE = PROJECT_ROOT / "data" / "mc_data" / "v1.1" / "mc_questions_file-1.csv
 PROMPT_CONFIG_FILE = PROJECT_ROOT / "data" / "prompt_configs_mcq.json"
 BATCH_SIZE = 500
 INFER_BATCH_SIZE = 64
-POST_EVAL_INFER_BATCH_SIZE = 4
+POST_EVAL_INFER_BATCH_SIZE = 16
 logging_level = logging.INFO
 
 def setup_logging() -> None:
