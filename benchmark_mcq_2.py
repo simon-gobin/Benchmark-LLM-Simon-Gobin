@@ -15,6 +15,12 @@ EXPERIMENTS = {
         "backend": "gemma",
         "prompt_id": "baseline",
     },
+    "qwen_baseline": {
+        "model_name": "Qwen/Qwen3-8B",
+        "model_label": "qwen3_8b",
+        "backend": "qwen",
+        "prompt_id": "baseline",
+    },
     "qwen_locale": {
         "model_name": "Qwen/Qwen3-8B",
         "model_label": "qwen3_8b",
