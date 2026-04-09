@@ -39,6 +39,9 @@ PROMPT_CONFIG_FILE = PROJECT_ROOT / "data" / "prompt_configs_mcq.json"
 BATCH_SIZE = 500
 INFER_BATCH_SIZE = 64
 POST_EVAL_INFER_BATCH_SIZE = 16
+POST_EVAL_SAMPLE_FRAC = 0.10
+POST_EVAL_MAX_ROWS_PER_GROUP = 10
+POST_EVAL_PER_COUNTRY = True
 logging_level = logging.INFO
 
 def setup_logging() -> None:
@@ -356,15 +359,37 @@ def release_model(model_bundle) -> None:
 
 #========================Post eval=================
 
-def sample_post_eval_rows(df: pd.DataFrame, frac: float = 0.10) -> pd.DataFrame:
-    df_true = df[df["is_correct"] == True].copy()
-    df_false = df[df["is_correct"] == False].copy()
+def sample_post_eval_rows(
+    df: pd.DataFrame,
+    frac: float = POST_EVAL_SAMPLE_FRAC,
+    max_rows_per_group: int = POST_EVAL_MAX_ROWS_PER_GROUP,
+) -> pd.DataFrame:
+    def sample_subset(subset: pd.DataFrame) -> pd.DataFrame:
+        if subset.empty:
+            return subset.head(0)
 
-    n_true = max(1, int(len(df_true) * frac)) if len(df_true) else 0
-    n_false = max(1, int(len(df_false) * frac)) if len(df_false) else 0
+        n_rows = min(max_rows_per_group, max(1, int(len(subset) * frac)))
+        return subset.sample(n=n_rows, random_state=42)
 
-    sampled_true = df_true.sample(n=min(n_true, len(df_true)), random_state=42) if n_true else df_true.head(0)
-    sampled_false = df_false.sample(n=min(n_false, len(df_false)), random_state=42) if n_false else df_false.head(0)
+    df_true = df[df["is_correct"]].copy()
+    df_false = df[~df["is_correct"]].copy()
+
+    if POST_EVAL_PER_COUNTRY:
+        sampled_true = (
+            df_true.groupby("country", group_keys=False)
+            .apply(sample_subset)
+            .reset_index(drop=True)
+            if not df_true.empty else df_true.head(0)
+        )
+        sampled_false = (
+            df_false.groupby("country", group_keys=False)
+            .apply(sample_subset)
+            .reset_index(drop=True)
+            if not df_false.empty else df_false.head(0)
+        )
+    else:
+        sampled_true = sample_subset(df_true)
+        sampled_false = sample_subset(df_false)
 
     return pd.concat([sampled_true, sampled_false], ignore_index=True)
 
@@ -408,11 +433,16 @@ def run_post_evaluation(model_label: str, prompt_no: str, backend: str, model_na
     output_file = OUTPUT_DIR / f"questions_answer_post_eval_{model_label}_{prompt_no}.csv"
 
     df = pd.read_csv(input_file)
-    df_sample = sample_post_eval_rows(df, frac=0.10)
+    df_sample = sample_post_eval_rows(df)
 
     if df_sample.empty:
         log.warning("No rows available for post evaluation")
         return
+
+    log.info("Post-eval full rows: %s", len(df))
+    log.info("Post-eval sampled rows: %s", len(df_sample))
+    log.info("Post-eval sampled correct rows: %s", int(df_sample["is_correct"].sum()))
+    log.info("Post-eval sampled incorrect rows: %s", int((~df_sample["is_correct"]).sum()))
 
     model_bundle = load_model(backend, model_name)
 
