@@ -6,6 +6,10 @@ Benchmark scripts for culturally grounded question answering with Gemma 3 and Qw
 
 This repository contains the code used to evaluate open-weight large language models on culturally specific everyday-knowledge questions. The main benchmark is based on BLEnD Track B (multiple-choice questions in English with culturally distinct answer options).
 
+Repository URL:
+
+- https://github.com/simon-gobin/Benchmark-LLM-Simon-Gobin
+
 The current project compares:
 
 - `google/gemma-3-12b-it`
@@ -151,6 +155,10 @@ login(token=hf_token)
 ```
 
 ## Recommended Colab workflow
+
+Colab notebook used for the benchmark:
+
+- https://colab.research.google.com/drive/1JGspDp7tKdqi8JFHmqv-n4a2aPMmQv9x?usp=sharing
 
 ```python
 !git clone https://github.com/simon-gobin/Benchmark-LLM-Simon-Gobin.git
