@@ -209,14 +209,43 @@ The benchmark should also be documented with:
 - batch sizes used for inference and post-evaluation
 - hardware environment used for the run
 
-## Submission checklist
+## Results snapshot
 
-For assignment submission, make sure to include:
+Overall MCQ accuracy:
 
-- the PDF report
-- the code
-- `requirements.txt`
-- `README.md`
-- prediction / output CSV files used for evaluation
-- the exact locale list
-- a note about Hugging Face authentication for Gemma
+| Model | Baseline | Locale-aware |
+|---|---:|---:|
+| Gemma 3 12B | 0.8654 | 0.8700 |
+| Qwen 3 8B | 0.8428 | 0.8614 |
+
+Key observations:
+
+- Gemma remains slightly stronger overall in both prompting settings.
+- Locale-aware prompting improves both models, but helps Qwen more strongly.
+- Qwen improves in all five evaluated countries under the locale-aware prompt.
+- In China, the ranking reverses under locale-aware prompting:
+  - Gemma baseline: `0.8568`
+  - Qwen baseline: `0.8518`
+  - Gemma locale-aware: `0.8644`
+  - Qwen locale-aware: `0.8742`
+
+Selected country-level results:
+
+| Country | Gemma base | Gemma locale | Qwen base | Qwen locale |
+|---|---:|---:|---:|---:|
+| Azerbaijan | 0.8134 | 0.8044 | 0.7643 | 0.7901 |
+| China | 0.8568 | 0.8644 | 0.8518 | 0.8742 |
+| Iran | 0.8199 | 0.8239 | 0.7968 | 0.8149 |
+| UK | 0.9160 | 0.9334 | 0.9044 | 0.9114 |
+| US | 0.9253 | 0.9277 | 0.9007 | 0.9207 |
+
+Post-evaluation summary on the balanced sampled subset:
+
+| Model | Prompt | Before | After | Delta |
+|---|---|---:|---:|---:|
+| Gemma 3 12B | Baseline | 0.50 | 0.56 | +0.06 |
+| Gemma 3 12B | Locale-aware | 0.50 | 0.60 | +0.10 |
+| Qwen 3 8B | Baseline | 0.50 | 0.50 | +0.00 |
+| Qwen 3 8B | Locale-aware | 0.50 | 0.45 | -0.05 |
+
+These results suggest that locale-aware prompting is a useful low-cost intervention, especially for Qwen in the main benchmark, while Gemma shows stronger gains in the repaired post-evaluation analysis.
