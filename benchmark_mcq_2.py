@@ -3,10 +3,12 @@ import pandas as pd
 import logging
 from pathlib import Path
 import gc
+import random
 import torch
 import time
 import json
 import re
+import numpy as np
 
 EXPERIMENTS = {
     "gemma_baseline": {
@@ -48,6 +50,7 @@ POST_EVAL_INFER_BATCH_SIZE = 16
 POST_EVAL_SAMPLE_FRAC = 0.10
 POST_EVAL_MAX_ROWS_PER_GROUP = 10
 POST_EVAL_PER_COUNTRY = True
+SEED = 42
 logging_level = logging.INFO
 
 def setup_logging() -> None:
@@ -65,6 +68,16 @@ def setup_logging() -> None:
 def load_prompt_configs() -> dict:
     with PROMPT_CONFIG_FILE.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def set_global_seed(seed: int = SEED) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    log.info("Global seed set to %s", seed)
 
 
 #=========================Gemma 3 loadder=================
@@ -534,37 +547,40 @@ def run_post_evaluation(model_label: str, prompt_no: str, backend: str, model_na
     log.info("Saved post evaluation to %s", output_file)
 
 
+def run_experiment(experiment_name: str, experiment: dict, prompt_configs: dict) -> None:
+    prompt_config = prompt_configs[experiment["prompt_id"]]
+    model_bundle = load_model(experiment["backend"], experiment["model_name"])
+
+    log.info("Running experiment %s", experiment_name)
+    run_benchmark(
+        country_list,
+        MCQ_FILE,
+        BATCH_SIZE,
+        INFER_BATCH_SIZE,
+        prompt_config,
+        model_bundle,
+        experiment["model_label"],
+    )
+    run_evaluation(experiment["model_label"], prompt_config["prompt_no"])
+    release_model(model_bundle)
+
+    run_post_evaluation(
+        model_label=experiment["model_label"],
+        prompt_no=prompt_config["prompt_no"],
+        backend=experiment["backend"],
+        model_name=experiment["model_name"],
+    )
 
 
 def main():
     setup_logging()
+    set_global_seed()
     try:
         log.info("Running benchmark for MCQ")
         prompt_configs = load_prompt_configs()
 
         for experiment_name, experiment in EXPERIMENTS.items():
-            prompt_config = prompt_configs[experiment["prompt_id"]]
-            model_bundle = load_model(experiment["backend"], experiment["model_name"])
-
-            log.info("Running experiment %s", experiment_name)
-            run_benchmark(
-                country_list,
-                MCQ_FILE,
-                BATCH_SIZE,
-                INFER_BATCH_SIZE,
-                prompt_config,
-                model_bundle,
-                experiment["model_label"],
-            )
-            run_evaluation(experiment["model_label"], prompt_config["prompt_no"])
-            release_model(model_bundle)
-
-            run_post_evaluation(
-                model_label=experiment["model_label"],
-                prompt_no=prompt_config["prompt_no"],
-                backend=experiment["backend"],
-                model_name=experiment["model_name"],
-            )
+            run_experiment(experiment_name, experiment, prompt_configs)
 
         log.info("Finished benchmark for MCQ")
     except Exception:

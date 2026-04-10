@@ -34,12 +34,6 @@ The current locale list is:
   - post-evaluation sampling
   - structured JSON parsing
 
-- `reparse_post_eval_csv.py`
-  Utility script to repair existing post-evaluation CSV files when raw model outputs contain multiple JSON blocks or fenced JSON.
-
-- `benchmarck_3.py`
-  Older experimental benchmark script kept for reference.
-
 - `data/`
   Prompt configurations and BLEnD-style input data.
 
@@ -99,6 +93,22 @@ The current script supports country-balanced sampling for post-evaluation. In th
 - with 5 countries, this yields up to `100` post-evaluation rows total
 
 This makes the post-evaluation analysis much cheaper than rerunning the full benchmark and reduces GPU memory pressure.
+
+## Reproducibility settings
+
+The benchmark script applies explicit global seeding before running any experiment:
+
+- `SEED = 42`
+- Python `random`
+- NumPy
+- PyTorch CPU
+- PyTorch CUDA, when available
+
+The project also uses deterministic decoding through:
+
+- `do_sample=False`
+
+In addition, post-evaluation sampling uses a fixed random state so that sampled subsets can be reproduced across runs.
 
 ## Local setup
 
@@ -180,37 +190,14 @@ If memory is still tight, reduce:
 
 This is especially relevant for Gemma 3 12B, which is much heavier than Qwen 3 8B.
 
-## Repairing existing post-evaluation CSV files
-
-Some model outputs, especially from Gemma, may contain more than one JSON block in the same response. This can lead to incomplete parsed fields if the CSV was created with an older parser.
-
-Use `reparse_post_eval_csv.py` to repair existing post-evaluation files without rerunning inference:
-
-```bash
-python3 reparse_post_eval_csv.py --suffix _reparsed \
-outputs/questions_answer_post_eval_gemma3_12b_it_mcq-baseline.csv \
-outputs/questions_answer_post_eval_gemma3_12b_it_mcq-locale-aware-confidence.csv \
-outputs/questions_answer_post_eval_qwen3_8b_mcq-baseline.csv \
-outputs/questions_answer_post_eval_qwen3_8b_mcq-locale-aware-confidence.csv
-```
-
-This creates repaired files such as:
-
-- `questions_answer_post_eval_gemma3_12b_it_mcq-baseline_reparsed.csv`
-
-If you want to overwrite the original files, run the script without `--suffix`.
-
 ## Reproducibility notes
-
-For reproducible runs, the project uses deterministic decoding settings through greedy generation:
-
-- `do_sample=False`
 
 The benchmark should also be documented with:
 
 - exact model names
 - exact locale list
 - exact prompt configuration
+- fixed global seed
 - batch sizes used for inference and post-evaluation
 - hardware environment used for the run
 

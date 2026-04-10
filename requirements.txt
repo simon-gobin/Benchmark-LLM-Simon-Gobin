@@ -2,6 +2,7 @@ torch
 transformers
 accelerate
 pandas
+numpy
 pytest
 safetensors
 sentencepiece
