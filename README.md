@@ -1,23 +1,22 @@
 # Benchmark-LLM-Simon-Gobin
 
-Benchmark scripts for cultural question answering with Gemma and Qwen.
+Benchmark scripts for culturally grounded question answering with Gemma 3 and Qwen 3 on BLEnD-style multiple-choice questions.
 
-## What is in this repo
+## Project scope
 
-- `benchmark_mcq_2.py`: multiple-choice benchmark with batch inference, MCQ accuracy evaluation, and a post-evaluation pass for error analysis.
-- `benchmarck_3.py`: earlier free-answer benchmark and BLEnD-style evaluation script.
-- `data/`: prompts, questions, annotations, and MCQ datasets.
-- `requirements.txt`: Python dependencies.
+This repository contains the code used to evaluate open-weight large language models on culturally specific everyday-knowledge questions. The main benchmark is based on BLEnD Track B (multiple-choice questions in English with culturally distinct answer options).
 
-## Current MCQ benchmark setup
+The current project compares:
 
-`benchmark_mcq_2.py` currently runs these experiments:
+- `google/gemma-3-12b-it`
+- `Qwen/Qwen3-8B`
 
-- `gemma_baseline`: `google/gemma-3-12b-it` with the baseline MCQ prompt
-- `qwen_locale`: `Qwen/Qwen3-8B` with the locale-aware confidence prompt
-- `gemma_locale`: `google/gemma-3-12b-it` with the locale-aware confidence prompt
+under both:
 
-Countries currently included:
+- a `baseline` prompt
+- a `locale-aware confidence` prompt
+
+The current locale list is:
 
 - `US`
 - `UK`
@@ -25,9 +24,42 @@ Countries currently included:
 - `China`
 - `Azerbaijan`
 
-## Outputs
+## Repository contents
 
-The script writes outputs under `outputs/`.
+- `benchmark_mcq_2.py`
+  Main MCQ benchmark with:
+  - model loading
+  - batch inference
+  - accuracy evaluation
+  - post-evaluation sampling
+  - structured JSON parsing
+
+- `reparse_post_eval_csv.py`
+  Utility script to repair existing post-evaluation CSV files when raw model outputs contain multiple JSON blocks or fenced JSON.
+
+- `benchmarck_3.py`
+  Older experimental benchmark script kept for reference.
+
+- `data/`
+  Prompt configurations and BLEnD-style input data.
+
+- `requirements.txt`
+  Python dependencies.
+
+## Current experiments
+
+`benchmark_mcq_2.py` currently runs these four experiments:
+
+- `gemma_baseline`
+- `qwen_baseline`
+- `gemma_locale`
+- `qwen_locale`
+
+The locale-aware configuration asks the model to answer with country awareness and emit a structured confidence field.
+
+## Main outputs
+
+All outputs are written under `outputs/`.
 
 Main benchmark files:
 
@@ -39,7 +71,7 @@ Post-evaluation files:
 
 - `questions_answer_post_eval_{model_label}_{prompt_no}.csv`
 
-The post-evaluation step samples 10% of correct rows and 10% of incorrect rows from the evaluated MCQ CSV, reruns them with a reasoning-oriented prompt, and stores structured JSON-derived fields such as:
+Typical post-evaluation columns include:
 
 - `post_eval_predicted_answer`
 - `post_eval_confidence`
@@ -49,9 +81,28 @@ The post-evaluation step samples 10% of correct rows and 10% of incorrect rows f
 - `post_eval_mentions_country_specific_cue`
 - `post_eval_is_correct`
 
+## Post-evaluation design
+
+The post-evaluation stage is a second-pass reflective analysis step. It does **not** rerun the full benchmark.
+
+Instead, it:
+
+- loads the evaluated MCQ file
+- samples correct and incorrect rows
+- reruns only that subset with a longer reasoning-oriented prompt
+- stores structured fields extracted from the JSON response
+
+The current script supports country-balanced sampling for post-evaluation. In the working configuration used for analysis:
+
+- sampling is balanced by country
+- up to `10` correct rows and `10` incorrect rows are sampled per country
+- with 5 countries, this yields up to `100` post-evaluation rows total
+
+This makes the post-evaluation analysis much cheaper than rerunning the full benchmark and reduces GPU memory pressure.
+
 ## Local setup
 
-Create and activate a virtual environment if you want an isolated install:
+Create and activate a virtual environment if you want an isolated Python environment:
 
 ```bash
 python3 -m venv .venv
@@ -59,7 +110,7 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-Run the MCQ benchmark:
+Run the benchmark:
 
 ```bash
 python3 benchmark_mcq_2.py
@@ -67,87 +118,110 @@ python3 benchmark_mcq_2.py
 
 ## Hugging Face access
 
-`google/gemma-3-12b-it` is a gated model. You need:
+`google/gemma-3-12b-it` is a gated model. Before running the benchmark, you need:
 
-1. Access approved on your Hugging Face account
-2. A valid Hugging Face token
-3. Authentication before running the script
+1. access approved on your Hugging Face account
+2. a valid Hugging Face token
+3. login before model loading
 
-If you are working locally:
+Local login:
 
 ```bash
 python3 -c "from huggingface_hub import login; login()"
 ```
 
-If you are working in Colab, store your token in Colab Secrets, then log in before running the benchmark.
-
-Example with a secret named `HF_TOKEN`:
+Colab login with a secret named `HF_TOKEN`:
 
 ```python
 from google.colab import userdata
-from huggingface_hub import login, whoami
+from huggingface_hub import login
 
-hf_token = userdata.get('HF_TOKEN')
+hf_token = userdata.get("HF_TOKEN")
 login(token=hf_token)
-print(whoami())
 ```
 
-You can verify gated model access with:
-
-```python
-from transformers import AutoTokenizer
-AutoTokenizer.from_pretrained("google/gemma-3-12b-it", token=True)
-```
-
-## Colab workflow
-
-Example Colab setup:
+## Recommended Colab workflow
 
 ```python
 !git clone https://github.com/simon-gobin/Benchmark-LLM-Simon-Gobin.git
 %cd Benchmark-LLM-Simon-Gobin
-!git fetch origin
-!git checkout codex/post-eval-mcq
-!git pull origin codex/post-eval-mcq
+!git checkout main
 !pip install -r requirements.txt
 !pip install -q huggingface_hub
 
 from google.colab import userdata
 from huggingface_hub import login
 
-hf_token = userdata.get('HF_TOKEN')
+hf_token = userdata.get("HF_TOKEN")
 login(token=hf_token)
 
 !python benchmark_mcq_2.py
 ```
 
-To copy outputs to Google Drive:
+To save outputs to Google Drive:
 
 ```python
 !mkdir -p /content/drive/MyDrive/benchmark_outputs
 !cp -r outputs/* /content/drive/MyDrive/benchmark_outputs
 ```
 
-## Notes on memory
+## Memory notes
 
-The post-evaluation prompt is longer and more memory-intensive than the main MCQ benchmark. The current script reduces this risk by using a dedicated post-evaluation mini-batch size:
+The post-evaluation prompt is longer than the main MCQ prompt and can cause out-of-memory errors more easily.
 
-- `POST_EVAL_INFER_BATCH_SIZE = 4`
-
-If you still hit GPU memory issues, reduce either:
+The script mitigates this by using a dedicated post-evaluation mini-batch size:
 
 - `POST_EVAL_INFER_BATCH_SIZE`
-- `max_new_tokens` in the post-evaluation generation call
 
-## Branch workflow
+If memory is still tight, reduce:
 
-Current development branch:
+- `POST_EVAL_INFER_BATCH_SIZE`
+- `max_new_tokens` used in post-evaluation
 
-- `codex/post-eval-mcq`
+This is especially relevant for Gemma 3 12B, which is much heavier than Qwen 3 8B.
 
-Recommended workflow:
+## Repairing existing post-evaluation CSV files
 
-1. Validate the benchmark on the feature branch
-2. Review the generated outputs
-3. Merge or copy the working changes into `main`
+Some model outputs, especially from Gemma, may contain more than one JSON block in the same response. This can lead to incomplete parsed fields if the CSV was created with an older parser.
 
+Use `reparse_post_eval_csv.py` to repair existing post-evaluation files without rerunning inference:
+
+```bash
+python3 reparse_post_eval_csv.py --suffix _reparsed \
+outputs/questions_answer_post_eval_gemma3_12b_it_mcq-baseline.csv \
+outputs/questions_answer_post_eval_gemma3_12b_it_mcq-locale-aware-confidence.csv \
+outputs/questions_answer_post_eval_qwen3_8b_mcq-baseline.csv \
+outputs/questions_answer_post_eval_qwen3_8b_mcq-locale-aware-confidence.csv
+```
+
+This creates repaired files such as:
+
+- `questions_answer_post_eval_gemma3_12b_it_mcq-baseline_reparsed.csv`
+
+If you want to overwrite the original files, run the script without `--suffix`.
+
+## Reproducibility notes
+
+For reproducible runs, the project uses deterministic decoding settings through greedy generation:
+
+- `do_sample=False`
+
+The benchmark should also be documented with:
+
+- exact model names
+- exact locale list
+- exact prompt configuration
+- batch sizes used for inference and post-evaluation
+- hardware environment used for the run
+
+## Submission checklist
+
+For assignment submission, make sure to include:
+
+- the PDF report
+- the code
+- `requirements.txt`
+- `README.md`
+- prediction / output CSV files used for evaluation
+- the exact locale list
+- a note about Hugging Face authentication for Gemma

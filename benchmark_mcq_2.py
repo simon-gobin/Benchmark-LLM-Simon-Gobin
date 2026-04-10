@@ -423,12 +423,50 @@ def parse_post_eval_response(text: str) -> dict:
     except Exception:
         pass
 
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
+    # Gemma sometimes returns multiple fenced JSON blocks, for example an initial
+    # {"answer_choice":"A"} block followed by the richer post-eval JSON object.
+    # The previous greedy regex merged both objects into one invalid string.
+    fenced_blocks = re.findall(r"```json\s*(.*?)\s*```", raw, re.DOTALL | re.IGNORECASE)
+    candidates = [block.strip() for block in fenced_blocks if block.strip()]
+
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(raw):
+        if raw[idx] != "{":
+            idx += 1
+            continue
         try:
-            return json.loads(match.group(0))
+            obj, end = decoder.raw_decode(raw[idx:])
+            if isinstance(obj, dict):
+                candidates.append(raw[idx:idx + end])
+            idx += max(end, 1)
+        except Exception:
+            idx += 1
+
+    parsed_objects = []
+    for candidate in candidates:
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                parsed_objects.append(obj)
         except Exception:
             pass
+
+    for obj in parsed_objects:
+        if "predicted_answer" in obj:
+            return obj
+
+    for obj in parsed_objects:
+        answer_choice = str(obj.get("answer_choice", "")).strip().upper()
+        if answer_choice in {"A", "B", "C", "D"}:
+            return {
+                "predicted_answer": answer_choice,
+                "confidence": "",
+                "reasoning_summary": "",
+                "error_type": "",
+                "likely_failure_source": "",
+                "mentions_country_specific_cue": "",
+            }
 
     return {}
 
